@@ -16,7 +16,12 @@ export interface Product {
   currency: string
   category_id: string | null
   status: 'active' | 'inactive' | 'archived'
-  product_images?: { id: string; url: string; alt_text: string | null }[]
+  product_images?: {
+  id: string
+  url: string
+  alt_text: string | null
+  sort_order: number
+  }[]
   inventory?: { quantity: number }
 }
 
