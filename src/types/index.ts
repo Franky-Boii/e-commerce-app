@@ -6,6 +6,19 @@ export interface Profile {
   role: UserRole
 }
 
+export interface Address {
+  id: string
+  user_id: string
+  line1: string
+  line2: string | null
+  city: string
+  province: string | null
+  postal_code: string
+  country: string
+  is_default: boolean
+  created_at: string
+}
+
 export interface Product {
   id: string
   sku: string
@@ -17,10 +30,10 @@ export interface Product {
   category_id: string | null
   status: 'active' | 'inactive' | 'archived'
   product_images?: {
-  id: string
-  url: string
-  alt_text: string | null
-  sort_order: number
+    id: string
+    url: string
+    alt_text: string | null
+    sort_order: number
   }[]
   inventory?: { quantity: number }
 }
@@ -59,6 +72,8 @@ export interface Order {
   delivery_fee: number
   total: number
   currency: string
+  shipping_address_id: string | null
   created_at: string
   order_items?: OrderItem[]
+  shipping_address?: Address | null
 }
