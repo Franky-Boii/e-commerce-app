@@ -1,7 +1,17 @@
 import { ChangeEvent, FormEvent, useEffect, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { supabase } from '@/lib/supabaseClient'
 import { Product } from '@/types'
+
+interface Category {
+  id: string
+  name: string
+  slug: string
+}
 
 type ProductForm = {
   name: string
@@ -11,6 +21,7 @@ type ProductForm = {
   currency: string
   stock: string
   status: 'active' | 'inactive' | 'archived'
+  category_id: string
 }
 
 const emptyForm: ProductForm = {
@@ -21,12 +32,13 @@ const emptyForm: ProductForm = {
   currency: 'ZAR',
   stock: '0',
   status: 'active',
+  category_id: '',
 }
 
 async function fetchAllProducts(): Promise<Product[]> {
   const { data, error } = await supabase
     .from('products')
-    .select('*, inventory(*), product_images(*)')
+    .select('*, inventory(*), product_images(*), categories(*)')
     .order('created_at', { ascending: false })
 
   if (error) throw error
@@ -34,8 +46,19 @@ async function fetchAllProducts(): Promise<Product[]> {
   return data as unknown as Product[]
 }
 
-function createSlug(name: string): string {
-  return name
+async function fetchCategories(): Promise<Category[]> {
+  const { data, error } = await supabase
+    .from('categories')
+    .select('id, name, slug')
+    .order('name', { ascending: true })
+
+  if (error) throw error
+
+  return data as Category[]
+}
+
+function createSlug(value: string): string {
+  return value
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, '-')
@@ -93,12 +116,33 @@ export default function AdminDashboard() {
     queryFn: fetchAllProducts,
   })
 
+  const {
+    data: categories,
+    isLoading: categoriesLoading,
+    error: categoriesError,
+  } = useQuery({
+    queryKey: ['categories'],
+    queryFn: fetchCategories,
+  })
+
   const [form, setForm] = useState<ProductForm>(emptyForm)
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
-  const [selectedImage, setSelectedImage] = useState<File | null>(null)
-  const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [editingProduct, setEditingProduct] =
+    useState<Product | null>(null)
+
+  const [selectedImage, setSelectedImage] =
+    useState<File | null>(null)
+
+  const [imagePreview, setImagePreview] =
+    useState<string | null>(null)
+
+  const [categoryName, setCategoryName] = useState('')
+  const [editingCategory, setEditingCategory] =
+    useState<Category | null>(null)
+
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [categoryError, setCategoryError] =
+    useState<string | null>(null)
 
   useEffect(() => {
     if (!editingProduct) {
@@ -114,18 +158,24 @@ export default function AdminDashboard() {
       description: editingProduct.description ?? '',
       price: String(editingProduct.price),
       currency: editingProduct.currency,
-      stock: String(editingProduct.inventory?.quantity ?? 0),
+      stock: String(
+        editingProduct.inventory?.quantity ?? 0
+      ),
       status: editingProduct.status,
+      category_id: editingProduct.category_id ?? '',
     })
 
     setSelectedImage(null)
 
-    const existingImage = editingProduct.product_images?.[0]
+    const existingImage =
+      editingProduct.product_images?.[0]
 
     setImagePreview(existingImage?.url ?? null)
   }, [editingProduct])
 
-  function handleImageChange(event: ChangeEvent<HTMLInputElement>) {
+  function handleImageChange(
+    event: ChangeEvent<HTMLInputElement>
+  ) {
     const file = event.target.files?.[0]
 
     if (!file) {
@@ -153,6 +203,114 @@ export default function AdminDashboard() {
     const previewUrl = URL.createObjectURL(file)
     setImagePreview(previewUrl)
   }
+
+  const createCategory = useMutation({
+    mutationFn: async () => {
+      const name = categoryName.trim()
+
+      if (!name) {
+        throw new Error('Category name is required.')
+      }
+
+      const slug = createSlug(name)
+
+      if (!slug) {
+        throw new Error(
+          'Category name must contain letters or numbers.'
+        )
+      }
+
+      const { error: insertError } = await supabase
+        .from('categories')
+        .insert({
+          name,
+          slug,
+        })
+
+      if (insertError) throw insertError
+    },
+
+    onSuccess: () => {
+      setCategoryName('')
+      setCategoryError(null)
+      setSuccess('Category created successfully.')
+
+      queryClient.invalidateQueries({
+        queryKey: ['categories'],
+      })
+    },
+
+    onError: (err) => {
+      setSuccess(null)
+      setCategoryError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to create category.'
+      )
+    },
+  })
+
+  const updateCategory = useMutation({
+    mutationFn: async () => {
+      if (!editingCategory) {
+        throw new Error(
+          'No category selected for editing.'
+        )
+      }
+
+      const name = categoryName.trim()
+
+      if (!name) {
+        throw new Error('Category name is required.')
+      }
+
+      const slug = createSlug(name)
+
+      if (!slug) {
+        throw new Error(
+          'Category name must contain letters or numbers.'
+        )
+      }
+
+      const { error: updateError } = await supabase
+        .from('categories')
+        .update({
+          name,
+          slug,
+        })
+        .eq('id', editingCategory.id)
+
+      if (updateError) throw updateError
+    },
+
+    onSuccess: () => {
+      setCategoryName('')
+      setEditingCategory(null)
+      setCategoryError(null)
+      setSuccess('Category updated successfully.')
+
+      queryClient.invalidateQueries({
+        queryKey: ['categories'],
+      })
+
+      queryClient.invalidateQueries({
+        queryKey: ['admin-products'],
+      })
+
+      queryClient.invalidateQueries({
+        queryKey: ['products'],
+      })
+    },
+
+    onError: (err) => {
+      setSuccess(null)
+      setCategoryError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to update category.'
+      )
+    },
+  })
 
   const createProduct = useMutation({
     mutationFn: async () => {
@@ -184,28 +342,34 @@ export default function AdminDashboard() {
 
       const slug = createSlug(name)
 
-      const { data: product, error: insertError } = await supabase
-        .from('products')
-        .insert({
-          name,
-          sku,
-          slug,
-          description: form.description.trim() || null,
-          price,
-          currency: form.currency.trim() || 'ZAR',
-          status: form.status,
-        })
-        .select()
-        .single()
+      const { data: product, error: insertError } =
+        await supabase
+          .from('products')
+          .insert({
+            name,
+            sku,
+            slug,
+            description:
+              form.description.trim() || null,
+            price,
+            currency:
+              form.currency.trim() || 'ZAR',
+            category_id:
+              form.category_id || null,
+            status: form.status,
+          })
+          .select()
+          .single()
 
       if (insertError) throw insertError
 
-      const { error: inventoryError } = await supabase
-        .from('inventory')
-        .insert({
-          product_id: product.id,
-          quantity: stock,
-        })
+      const { error: inventoryError } =
+        await supabase
+          .from('inventory')
+          .insert({
+            product_id: product.id,
+            quantity: stock,
+          })
 
       if (inventoryError) {
         await supabase
@@ -218,19 +382,21 @@ export default function AdminDashboard() {
 
       if (selectedImage) {
         try {
-          const publicUrl = await uploadProductImage(
-            product.id,
-            selectedImage
-          )
+          const publicUrl =
+            await uploadProductImage(
+              product.id,
+              selectedImage
+            )
 
-          const { error: imageError } = await supabase
-            .from('product_images')
-            .insert({
-              product_id: product.id,
-              url: publicUrl,
-              alt_text: name,
-              sort_order: 0,
-            })
+          const { error: imageError } =
+            await supabase
+              .from('product_images')
+              .insert({
+                product_id: product.id,
+                url: publicUrl,
+                alt_text: name,
+                sort_order: 0,
+              })
 
           if (imageError) {
             throw imageError
@@ -280,13 +446,16 @@ export default function AdminDashboard() {
   const updateProduct = useMutation({
     mutationFn: async () => {
       if (!editingProduct) {
-        throw new Error('No product selected for editing.')
+        throw new Error(
+          'No product selected for editing.'
+        )
       }
 
       const name = form.name.trim()
       const sku = form.sku.trim()
       const description = form.description.trim()
-      const currency = form.currency.trim() || 'ZAR'
+      const currency =
+        form.currency.trim() || 'ZAR'
 
       if (!name) {
         throw new Error('Product name is required.')
@@ -313,53 +482,73 @@ export default function AdminDashboard() {
 
       const slug = createSlug(name)
 
-      const { error: productError } = await supabase
-        .from('products')
-        .update({
-          name,
-          sku,
-          slug,
-          description: description || null,
-          price,
-          currency,
-          status: form.status,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', editingProduct.id)
+      const { error: productError } =
+        await supabase
+          .from('products')
+          .update({
+            name,
+            sku,
+            slug,
+            description: description || null,
+            price,
+            currency,
+            category_id:
+              form.category_id || null,
+            status: form.status,
+            updated_at:
+              new Date().toISOString(),
+          })
+          .eq('id', editingProduct.id)
 
       if (productError) throw productError
 
-      const { error: inventoryError } = await supabase
-        .from('inventory')
-        .upsert({
-          product_id: editingProduct.id,
-          quantity: stock,
-          updated_at: new Date().toISOString(),
-        })
+      const { error: inventoryError } =
+        await supabase
+          .from('inventory')
+          .upsert({
+            product_id: editingProduct.id,
+            quantity: stock,
+            updated_at:
+              new Date().toISOString(),
+          })
 
       if (inventoryError) throw inventoryError
 
       if (selectedImage) {
-        const publicUrl = await uploadProductImage(
-          editingProduct.id,
-          selectedImage
-        )
+        const publicUrl =
+          await uploadProductImage(
+            editingProduct.id,
+            selectedImage
+          )
 
-        const { data: existingImages, error: existingImagesError } =
-          await supabase
-            .from('product_images')
-            .select('id, url')
-            .eq('product_id', editingProduct.id)
-            .order('sort_order', { ascending: true })
+        const {
+          data: existingImages,
+          error: existingImagesError,
+        } = await supabase
+          .from('product_images')
+          .select('id, url')
+          .eq(
+            'product_id',
+            editingProduct.id
+          )
+          .order('sort_order', {
+            ascending: true,
+          })
 
         if (existingImagesError) {
           throw existingImagesError
         }
 
-        if (existingImages && existingImages.length > 0) {
-          const firstImage = existingImages[0]
+        if (
+          existingImages &&
+          existingImages.length > 0
+        ) {
+          const firstImage =
+            existingImages[0]
 
-          const { error: imageUpdateError } = await supabase
+          const {
+            error: imageUpdateError,
+          } = await supabase
             .from('product_images')
             .update({
               url: publicUrl,
@@ -371,10 +560,13 @@ export default function AdminDashboard() {
             throw imageUpdateError
           }
         } else {
-          const { error: imageInsertError } = await supabase
+          const {
+            error: imageInsertError,
+          } = await supabase
             .from('product_images')
             .insert({
-              product_id: editingProduct.id,
+              product_id:
+                editingProduct.id,
               url: publicUrl,
               alt_text: name,
               sort_order: 0,
@@ -417,15 +609,19 @@ export default function AdminDashboard() {
   const toggleProductStatus = useMutation({
     mutationFn: async (product: Product) => {
       const nextStatus =
-        product.status === 'active' ? 'inactive' : 'active'
+        product.status === 'active'
+          ? 'inactive'
+          : 'active'
 
-      const { error: updateError } = await supabase
-        .from('products')
-        .update({
-          status: nextStatus,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', product.id)
+      const { error: updateError } =
+        await supabase
+          .from('products')
+          .update({
+            status: nextStatus,
+            updated_at:
+              new Date().toISOString(),
+          })
+          .eq('id', product.id)
 
       if (updateError) throw updateError
     },
@@ -470,6 +666,21 @@ export default function AdminDashboard() {
     }
   }
 
+  function handleCategorySubmit(
+    event: FormEvent
+  ) {
+    event.preventDefault()
+
+    setCategoryError(null)
+    setSuccess(null)
+
+    if (editingCategory) {
+      updateCategory.mutate()
+    } else {
+      createCategory.mutate()
+    }
+  }
+
   function handleEdit(product: Product) {
     setError(null)
     setSuccess(null)
@@ -490,21 +701,144 @@ export default function AdminDashboard() {
     setSuccess(null)
   }
 
+  function handleEditCategory(
+    category: Category
+  ) {
+    setCategoryError(null)
+    setSuccess(null)
+    setEditingCategory(category)
+    setCategoryName(category.name)
+  }
+
+  function handleCancelCategoryEdit() {
+    setEditingCategory(null)
+    setCategoryName('')
+    setCategoryError(null)
+  }
+
   const isSaving =
-    createProduct.isPending || updateProduct.isPending
+    createProduct.isPending ||
+    updateProduct.isPending
+
+  const isSavingCategory =
+    createCategory.isPending ||
+    updateCategory.isPending
 
   return (
-    <div className="max-w-5xl mx-auto p-6">
+    <div className="max-w-6xl mx-auto p-6">
       <div className="mb-8">
         <h1 className="text-3xl font-semibold">
-          Admin — Product Management
+          Admin — Store Management
         </h1>
 
         <p className="text-gray-600 mt-2">
-          Create, edit, manage stock, images, and product availability.
+          Manage categories, products, stock,
+          images, and product availability.
         </p>
       </div>
 
+      {/* Categories */}
+      <section className="border rounded-lg p-6 mb-8 bg-white shadow-sm">
+        <div className="mb-5">
+          <h2 className="text-xl font-semibold">
+            Categories
+          </h2>
+
+          <p className="text-sm text-gray-500 mt-1">
+            Create and manage product categories.
+          </p>
+        </div>
+
+        <form
+          onSubmit={handleCategorySubmit}
+          className="flex flex-col sm:flex-row gap-3"
+        >
+          <input
+            type="text"
+            value={categoryName}
+            onChange={(event) =>
+              setCategoryName(event.target.value)
+            }
+            placeholder="Category name"
+            className="flex-1 border rounded px-3 py-2"
+          />
+
+          <button
+            type="submit"
+            disabled={isSavingCategory}
+            className="bg-black text-white rounded px-5 py-2 disabled:opacity-50"
+          >
+            {isSavingCategory
+              ? 'Saving…'
+              : editingCategory
+                ? 'Save category'
+                : 'Add category'}
+          </button>
+
+          {editingCategory && (
+            <button
+              type="button"
+              onClick={handleCancelCategoryEdit}
+              className="border rounded px-5 py-2 hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+          )}
+        </form>
+
+        {categoryError && (
+          <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {categoryError}
+          </div>
+        )}
+
+        {categoriesError && (
+          <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            Failed to load categories.
+          </div>
+        )}
+
+        <div className="mt-5 space-y-2">
+          {categoriesLoading ? (
+            <p className="text-sm text-gray-500">
+              Loading categories…
+            </p>
+          ) : !categories?.length ? (
+            <p className="text-sm text-gray-500">
+              No categories yet.
+            </p>
+          ) : (
+            categories.map((category) => (
+              <div
+                key={category.id}
+                className="flex items-center justify-between gap-4 border rounded-lg px-4 py-3"
+              >
+                <div>
+                  <p className="font-medium">
+                    {category.name}
+                  </p>
+
+                  <p className="text-xs text-gray-500">
+                    /{category.slug}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleEditCategory(category)
+                  }
+                  className="border rounded px-3 py-2 text-sm hover:bg-gray-50"
+                >
+                  Edit
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+      {/* Product form */}
       <form
         onSubmit={handleSubmit}
         className="border rounded-lg p-6 mb-8 bg-white shadow-sm"
@@ -512,7 +846,9 @@ export default function AdminDashboard() {
         <div className="flex items-center justify-between mb-5">
           <div>
             <h2 className="text-xl font-semibold">
-              {editingProduct ? 'Edit Product' : 'Create Product'}
+              {editingProduct
+                ? 'Edit Product'
+                : 'Create Product'}
             </h2>
 
             {editingProduct && (
@@ -619,12 +955,51 @@ export default function AdminDashboard() {
               onChange={(event) =>
                 setForm((current) => ({
                   ...current,
-                  currency: event.target.value.toUpperCase(),
+                  currency:
+                    event.target.value.toUpperCase(),
                 }))
               }
               placeholder="ZAR"
               className="w-full border rounded px-3 py-2"
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Category
+            </label>
+
+            <select
+              value={form.category_id}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  category_id:
+                    event.target.value,
+                }))
+              }
+              className="w-full border rounded px-3 py-2 bg-white"
+            >
+              <option value="">
+                No category
+              </option>
+
+              {categories?.map((category) => (
+                <option
+                  key={category.id}
+                  value={category.id}
+                >
+                  {category.name}
+                </option>
+              ))}
+            </select>
+
+            {!categoriesLoading &&
+              !categories?.length && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Create a category above first.
+                </p>
+              )}
           </div>
 
           <div>
@@ -659,14 +1034,22 @@ export default function AdminDashboard() {
               onChange={(event) =>
                 setForm((current) => ({
                   ...current,
-                  status: event.target.value as ProductForm['status'],
+                  status:
+                    event.target
+                      .value as ProductForm['status'],
                 }))
               }
               className="w-full border rounded px-3 py-2 bg-white"
             >
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-              <option value="archived">Archived</option>
+              <option value="active">
+                Active
+              </option>
+              <option value="inactive">
+                Inactive
+              </option>
+              <option value="archived">
+                Archived
+              </option>
             </select>
           </div>
 
@@ -681,7 +1064,8 @@ export default function AdminDashboard() {
               onChange={(event) =>
                 setForm((current) => ({
                   ...current,
-                  description: event.target.value,
+                  description:
+                    event.target.value,
                 }))
               }
               placeholder="Product description"
@@ -702,8 +1086,8 @@ export default function AdminDashboard() {
             />
 
             <p className="text-xs text-gray-500 mt-1">
-              JPG, PNG, WEBP, or another supported image format. Maximum
-              size: 5 MB.
+              JPG, PNG, WEBP, or another supported
+              image format. Maximum size: 5 MB.
             </p>
 
             {imagePreview && (
@@ -749,6 +1133,7 @@ export default function AdminDashboard() {
         </div>
       </form>
 
+      {/* Products */}
       <section>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold">
@@ -757,7 +1142,9 @@ export default function AdminDashboard() {
 
           <span className="text-sm text-gray-500">
             {products?.length ?? 0} product
-            {(products?.length ?? 0) === 1 ? '' : 's'}
+            {(products?.length ?? 0) === 1
+              ? ''
+              : 's'}
           </span>
         </div>
 
@@ -773,17 +1160,31 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {!isLoading && !productsError && !products?.length && (
-          <div className="border rounded-lg p-6 text-center text-gray-500">
-            No products yet.
-          </div>
-        )}
+        {!isLoading &&
+          !productsError &&
+          !products?.length && (
+            <div className="border rounded-lg p-6 text-center text-gray-500">
+              No products yet.
+            </div>
+          )}
 
         <div className="space-y-3">
           {products?.map((product) => {
-            const stock = product.inventory?.quantity ?? 0
-            const isActive = product.status === 'active'
-            const productImage = product.product_images?.[0]
+            const stock =
+              product.inventory?.quantity ?? 0
+
+            const isActive =
+              product.status === 'active'
+
+            const productImage =
+              product.product_images?.[0]
+
+            const productCategory =
+              categories?.find(
+                (category) =>
+                  category.id ===
+                  product.category_id
+              )
 
             return (
               <div
@@ -795,7 +1196,10 @@ export default function AdminDashboard() {
                     {productImage ? (
                       <img
                         src={productImage.url}
-                        alt={productImage.alt_text ?? product.name}
+                        alt={
+                          productImage.alt_text ??
+                          product.name
+                        }
                         className="w-20 h-20 object-cover rounded-lg border"
                       />
                     ) : (
@@ -805,22 +1209,30 @@ export default function AdminDashboard() {
                     )}
 
                     <div>
-                      <div className="flex items-center gap-3">
+                      <div className="flex flex-wrap items-center gap-3">
                         <h3 className="font-semibold">
                           {product.name}
                         </h3>
 
                         <span
                           className={`text-xs px-2 py-1 rounded-full ${
-                            product.status === 'active'
+                            product.status ===
+                            'active'
                               ? 'bg-green-100 text-green-700'
-                              : product.status === 'inactive'
+                              : product.status ===
+                                  'inactive'
                                 ? 'bg-yellow-100 text-yellow-700'
                                 : 'bg-gray-100 text-gray-700'
                           }`}
                         >
                           {product.status}
                         </span>
+
+                        {productCategory && (
+                          <span className="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-700">
+                            {productCategory.name}
+                          </span>
+                        )}
                       </div>
 
                       <p className="text-sm text-gray-500 mt-1">
@@ -829,7 +1241,9 @@ export default function AdminDashboard() {
 
                       <p className="text-sm mt-2">
                         {product.currency}{' '}
-                        {Number(product.price).toFixed(2)}
+                        {Number(
+                          product.price
+                        ).toFixed(2)}
                         {' · '}
                         Stock: {stock}
                       </p>
@@ -839,7 +1253,9 @@ export default function AdminDashboard() {
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => handleEdit(product)}
+                      onClick={() =>
+                        handleEdit(product)
+                      }
                       className="border rounded px-3 py-2 text-sm hover:bg-gray-50"
                     >
                       Edit
@@ -847,9 +1263,13 @@ export default function AdminDashboard() {
 
                     <button
                       type="button"
-                      disabled={toggleProductStatus.isPending}
+                      disabled={
+                        toggleProductStatus.isPending
+                      }
                       onClick={() =>
-                        toggleProductStatus.mutate(product)
+                        toggleProductStatus.mutate(
+                          product
+                        )
                       }
                       className={`rounded px-3 py-2 text-sm text-white disabled:opacity-50 ${
                         isActive
