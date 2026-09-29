@@ -6,19 +6,6 @@ export interface Profile {
   role: UserRole
 }
 
-export interface Address {
-  id: string
-  user_id: string
-  line1: string
-  line2: string | null
-  city: string
-  province: string | null
-  postal_code: string
-  country: string
-  is_default: boolean
-  created_at: string
-}
-
 export interface Product {
   id: string
   sku: string
@@ -33,9 +20,11 @@ export interface Product {
     id: string
     url: string
     alt_text: string | null
-    sort_order: number
+    sort_order?: number
   }[]
-  inventory?: { quantity: number }
+  inventory?: {
+    quantity: number
+  }
 }
 
 export interface CartItem {
@@ -44,6 +33,19 @@ export interface CartItem {
   product_id: string
   quantity: number
   product?: Product
+}
+
+export interface Address {
+  id: string
+  user_id: string
+  line1: string
+  line2: string | null
+  city: string
+  province: string | null
+  postal_code: string
+  country: string
+  is_default: boolean
+  created_at: string
 }
 
 export type OrderStatus =
@@ -67,13 +69,14 @@ export interface OrderItem {
 
 export interface Order {
   id: string
+  user_id: string
   status: OrderStatus
   subtotal: number
   delivery_fee: number
   total: number
   currency: string
-  shipping_address_id: string | null
   created_at: string
+  shipping_address_id?: string | null
   order_items?: OrderItem[]
-  shipping_address?: Address | null
+  addresses?: Address | null
 }

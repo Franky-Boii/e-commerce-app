@@ -5,16 +5,12 @@ import { Order } from '@/types'
 async function fetchOrders(): Promise<Order[]> {
   const { data, error } = await supabase
     .from('orders')
-    .select(
-      `
+    .select(`
       *,
       order_items(*),
-      shipping_address:addresses(*)
-      `,
-    )
-    .order('created_at', {
-      ascending: false,
-    })
+      addresses(*)
+    `)
+    .order('created_at', { ascending: false })
 
   if (error) throw error
 
@@ -31,12 +27,14 @@ const statusColor: Record<string, string> = {
   refunded: 'text-red-600',
 }
 
-function formatStatus(status: string) {
-  return status
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (letter) =>
-      letter.toUpperCase(),
-    )
+const statusLabel: Record<string, string> = {
+  pending_payment: 'Pending payment',
+  paid: 'Paid',
+  processing: 'Processing',
+  shipped: 'Shipped',
+  delivered: 'Delivered',
+  cancelled: 'Cancelled',
+  refunded: 'Refunded',
 }
 
 export default function OrderHistory() {
@@ -67,116 +65,162 @@ export default function OrderHistory() {
 
   if (!orders?.length) {
     return (
-      <div className="p-8 text-center text-gray-500">
-        No orders yet.
+      <div className="max-w-3xl mx-auto p-8 text-center">
+        <h1 className="text-2xl font-semibold mb-2">
+          Your orders
+        </h1>
+
+        <p className="text-gray-500">
+          You haven't placed any orders yet.
+        </p>
       </div>
     )
   }
 
   return (
-    <div className="max-w-3xl mx-auto p-6">
+    <div className="max-w-4xl mx-auto p-6">
       <h1 className="text-2xl font-semibold mb-6">
         Your orders
       </h1>
 
-      <div className="space-y-5">
-        {orders.map((order) => (
-          <div
-            key={order.id}
-            className="border rounded-lg p-5"
-          >
-            <div className="flex justify-between items-center gap-4">
-              <p className="font-medium">
-                Order #{order.id.slice(0, 8)}
-              </p>
+      <div className="space-y-6">
+        {orders.map((order) => {
+          const address = order.addresses
 
-              <span
-                className={`text-sm font-medium ${
-                  statusColor[order.status] ?? ''
-                }`}
-              >
-                {formatStatus(order.status)}
-              </span>
-            </div>
-
-            <p className="text-sm text-gray-600 mt-1">
-              {new Date(
-                order.created_at,
-              ).toLocaleDateString()}{' '}
-              · {order.currency}{' '}
-              {order.total.toFixed(2)}
-            </p>
-
-            <ul className="text-sm text-gray-700 mt-4 space-y-1">
-              {order.order_items?.map((item) => (
-                <li key={item.id}>
-                  {item.quantity} ×{' '}
-                  {item.product_name}
-                  {' — '}
-                  {order.currency}{' '}
-                  {item.line_total.toFixed(2)}
-                </li>
-              ))}
-            </ul>
-
-            {order.shipping_address && (
-              <div className="mt-4 pt-4 border-t">
-                <p className="text-sm font-medium mb-2">
-                  Shipping address
-                </p>
-
-                <div className="text-sm text-gray-600">
-                  <p>
-                    {order.shipping_address.line1}
-                  </p>
-
-                  {order.shipping_address.line2 && (
-                    <p>
-                      {order.shipping_address.line2}
+          return (
+            <div
+              key={order.id}
+              className="border rounded-xl bg-white shadow-sm overflow-hidden"
+            >
+              {/* Order header */}
+              <div className="p-5 border-b bg-gray-50">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
+                  <div>
+                    <p className="font-semibold">
+                      Order #{order.id.slice(0, 8)}
                     </p>
-                  )}
 
-                  <p>
-                    {order.shipping_address.city}
-                    {order.shipping_address.province
-                      ? `, ${order.shipping_address.province}`
-                      : ''}
-                  </p>
+                    <p className="text-sm text-gray-500 mt-1">
+                      {new Date(order.created_at).toLocaleDateString(
+                        'en-ZA',
+                        {
+                          year: 'numeric',
+                          month: 'long',
+                          day: 'numeric',
+                        }
+                      )}
+                    </p>
+                  </div>
 
-                  <p>
-                    {order.shipping_address.postal_code},{' '}
-                    {order.shipping_address.country}
-                  </p>
+                  <span
+                    className={`text-sm font-semibold ${
+                      statusColor[order.status] ?? 'text-gray-600'
+                    }`}
+                  >
+                    {statusLabel[order.status] ??
+                      order.status.replace('_', ' ')}
+                  </span>
                 </div>
               </div>
-            )}
 
-            <div className="mt-4 pt-4 border-t flex justify-between text-sm">
-              <span>Subtotal</span>
-              <span>
-                {order.currency}{' '}
-                {order.subtotal.toFixed(2)}
-              </span>
-            </div>
+              {/* Products */}
+              <div className="p-5">
+                <h2 className="font-medium mb-3">
+                  Items
+                </h2>
 
-            <div className="mt-1 flex justify-between text-sm">
-              <span>Delivery</span>
-              <span>
-                {order.delivery_fee === 0
-                  ? 'FREE'
-                  : `${order.currency} ${order.delivery_fee.toFixed(2)}`}
-              </span>
-            </div>
+                <div className="divide-y">
+                  {order.order_items?.map((item) => (
+                    <div
+                      key={item.id}
+                      className="py-3 flex justify-between gap-4"
+                    >
+                      <div>
+                        <p className="font-medium">
+                          {item.product_name}
+                        </p>
 
-            <div className="mt-2 flex justify-between font-semibold">
-              <span>Total</span>
-              <span>
-                {order.currency}{' '}
-                {order.total.toFixed(2)}
-              </span>
+                        <p className="text-sm text-gray-500">
+                          {item.quantity} × {order.currency}{' '}
+                          {Number(item.unit_price).toFixed(2)}
+                        </p>
+                      </div>
+
+                      <p className="font-medium whitespace-nowrap">
+                        {order.currency}{' '}
+                        {Number(item.line_total).toFixed(2)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Shipping address */}
+              {address && (
+                <div className="px-5 pb-5">
+                  <h2 className="font-medium mb-2">
+                    Shipping address
+                  </h2>
+
+                  <div className="text-sm text-gray-600">
+                    <p>{address.line1}</p>
+
+                    {address.line2 && (
+                      <p>{address.line2}</p>
+                    )}
+
+                    <p>
+                      {address.city}
+                      {address.province
+                        ? `, ${address.province}`
+                        : ''}
+                    </p>
+
+                    <p>{address.postal_code}</p>
+
+                    <p>{address.country}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Order totals */}
+              <div className="border-t p-5">
+                <div className="max-w-sm ml-auto space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">
+                      Subtotal
+                    </span>
+
+                    <span>
+                      {order.currency}{' '}
+                      {Number(order.subtotal).toFixed(2)}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">
+                      Delivery
+                    </span>
+
+                    <span>
+                      {order.currency}{' '}
+                      {Number(order.delivery_fee).toFixed(2)}
+                    </span>
+                  </div>
+
+                  <div className="border-t pt-2 flex justify-between text-base font-semibold">
+                    <span>Total</span>
+
+                    <span>
+                      {order.currency}{' '}
+                      {Number(order.total).toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )

@@ -1,9 +1,8 @@
-import { FormEvent, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useCart } from '@/context/CartContext'
 import { useAuth } from '@/context/AuthContext'
 import { supabase } from '@/lib/supabaseClient'
-import { Address } from '@/types'
 
 interface PayfastCheckout {
   order_id: string
@@ -11,54 +10,58 @@ interface PayfastCheckout {
   fields: Record<string, string>
 }
 
-interface AddressForm {
+interface Address {
+  id: string
   line1: string
-  line2: string
+  line2: string | null
   city: string
-  province: string
+  province: string | null
   postal_code: string
   country: string
-}
-
-const emptyAddressForm: AddressForm = {
-  line1: '',
-  line2: '',
-  city: '',
-  province: '',
-  postal_code: '',
-  country: 'South Africa',
+  is_default: boolean
 }
 
 export default function Checkout() {
-  const { items, subtotal } = useCart()
+  const { items } = useCart()
   const { session } = useAuth()
   const navigate = useNavigate()
 
+  const formRef = useRef<HTMLFormElement>(null)
+
   const [addresses, setAddresses] = useState<Address[]>([])
   const [selectedAddressId, setSelectedAddressId] = useState('')
-  const [addressForm, setAddressForm] =
-    useState<AddressForm>(emptyAddressForm)
 
   const [showAddressForm, setShowAddressForm] = useState(false)
-  const [loadingAddresses, setLoadingAddresses] = useState(true)
-  const [savingAddress, setSavingAddress] = useState(false)
+
+  const [line1, setLine1] = useState('')
+  const [line2, setLine2] = useState('')
+  const [city, setCity] = useState('')
+  const [province, setProvince] = useState('')
+  const [postalCode, setPostalCode] = useState('')
+  const [country, setCountry] = useState('South Africa')
+  const [isDefault, setIsDefault] = useState(false)
 
   const [checkout, setCheckout] =
     useState<PayfastCheckout | null>(null)
 
-  const formRef = useRef<HTMLFormElement>(null)
-
   const [error, setError] = useState<string | null>(null)
+
   const [submitting, setSubmitting] = useState(false)
 
-  const deliveryFee = subtotal >= 1000 ? 0 : 60
-  const estimatedTotal = subtotal + deliveryFee
+  const [loadingAddresses, setLoadingAddresses] = useState(true)
 
   useEffect(() => {
     if (!session) {
       navigate('/login')
-      return
     }
+  }, [session, navigate])
+
+  // ----------------------------------------------------------
+  // Load saved addresses
+  // ----------------------------------------------------------
+
+  useEffect(() => {
+    if (!session) return
 
     async function loadAddresses() {
       setLoadingAddresses(true)
@@ -66,7 +69,9 @@ export default function Checkout() {
 
       const { data, error: addressError } = await supabase
         .from('addresses')
-        .select('*')
+        .select(
+          'id, line1, line2, city, province, postal_code, country, is_default',
+        )
         .order('is_default', {
           ascending: false,
         })
@@ -75,18 +80,18 @@ export default function Checkout() {
         })
 
       if (addressError) {
-        setError('Could not load your shipping addresses.')
+        setError(addressError.message)
       } else {
-        const loaded = (data ?? []) as Address[]
+        setAddresses(data ?? [])
 
-        setAddresses(loaded)
-
-        const defaultAddress =
-          loaded.find((address) => address.is_default) ??
-          loaded[0]
+        const defaultAddress = data?.find(
+          (address) => address.is_default,
+        )
 
         if (defaultAddress) {
           setSelectedAddressId(defaultAddress.id)
+        } else if (data?.length) {
+          setSelectedAddressId(data[0].id)
         }
       }
 
@@ -94,76 +99,99 @@ export default function Checkout() {
     }
 
     loadAddresses()
-  }, [session, navigate])
+  }, [session])
 
-  async function saveAddress(event: FormEvent) {
-    event.preventDefault()
+  // ----------------------------------------------------------
+  // Add a new address
+  // ----------------------------------------------------------
 
-    if (!session?.user) {
-      setError('You must be signed in.')
+  async function saveAddress() {
+    setError(null)
+
+    if (!line1.trim()) {
+      setError('Address line 1 is required')
       return
     }
 
-    setSavingAddress(true)
-    setError(null)
-
-    try {
-      if (
-        !addressForm.line1.trim() ||
-        !addressForm.city.trim() ||
-        !addressForm.postal_code.trim() ||
-        !addressForm.country.trim()
-      ) {
-        throw new Error(
-          'Please complete all required address fields.',
-        )
-      }
-
-      const shouldBeDefault = addresses.length === 0
-
-      const { data, error: insertError } = await supabase
-        .from('addresses')
-        .insert({
-          user_id: session.user.id,
-          line1: addressForm.line1.trim(),
-          line2: addressForm.line2.trim() || null,
-          city: addressForm.city.trim(),
-          province: addressForm.province.trim() || null,
-          postal_code: addressForm.postal_code.trim(),
-          country: addressForm.country.trim(),
-          is_default: shouldBeDefault,
-        })
-        .select()
-        .single()
-
-      if (insertError) {
-        throw insertError
-      }
-
-      const newAddress = data as Address
-
-      setAddresses((current) => [
-        newAddress,
-        ...current,
-      ])
-
-      setSelectedAddressId(newAddress.id)
-      setAddressForm(emptyAddressForm)
-      setShowAddressForm(false)
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Could not save address.',
-      )
-    } finally {
-      setSavingAddress(false)
+    if (!city.trim()) {
+      setError('City is required')
+      return
     }
+
+    if (!postalCode.trim()) {
+      setError('Postal code is required')
+      return
+    }
+
+    if (!country.trim()) {
+      setError('Country is required')
+      return
+    }
+
+    if (!session?.user.id) {
+      setError('You must be logged in')
+      return
+    }
+
+    const { data, error: insertError } = await supabase
+      .from('addresses')
+      .insert({
+        user_id: session.user.id,
+        line1: line1.trim(),
+        line2: line2.trim() || null,
+        city: city.trim(),
+        province: province.trim() || null,
+        postal_code: postalCode.trim(),
+        country: country.trim(),
+        is_default: isDefault,
+      })
+      .select()
+      .single()
+
+    if (insertError) {
+      setError(insertError.message)
+      return
+    }
+
+    // If this address is now the default, reload the addresses
+    // so the UI reflects the current database state.
+    const { data: refreshedAddresses } = await supabase
+      .from('addresses')
+      .select(
+        'id, line1, line2, city, province, postal_code, country, is_default',
+      )
+      .order('is_default', {
+        ascending: false,
+      })
+      .order('created_at', {
+        ascending: false,
+      })
+
+    const updatedAddresses = refreshedAddresses ?? [
+      data as Address,
+    ]
+
+    setAddresses(updatedAddresses)
+    setSelectedAddressId(data.id)
+
+    // Reset form
+    setLine1('')
+    setLine2('')
+    setCity('')
+    setProvince('')
+    setPostalCode('')
+    setCountry('South Africa')
+    setIsDefault(false)
+    setShowAddressForm(false)
   }
+
+  // ----------------------------------------------------------
+  // Start checkout
+  // ----------------------------------------------------------
 
   async function startCheckout() {
     if (!selectedAddressId) {
-      setError('Please select a shipping address.')
+      setError('Please select a shipping address')
       return
     }
 
@@ -186,9 +214,7 @@ export default function Checkout() {
       }
 
       if (!data) {
-        throw new Error(
-          'No response from create-order',
-        )
+        throw new Error('No response from create-order')
       }
 
       setCheckout(data)
@@ -196,15 +222,17 @@ export default function Checkout() {
       setError(
         err instanceof Error
           ? err.message
-          : 'Could not start checkout.',
+          : 'Could not start checkout',
       )
     } finally {
       setSubmitting(false)
     }
   }
 
-  // Automatically submit the PayFast form once the
-  // Edge Function has returned the payment fields.
+  // ----------------------------------------------------------
+  // Auto-submit PayFast form
+  // ----------------------------------------------------------
+
   useEffect(() => {
     if (checkout && formRef.current) {
       formRef.current.submit()
@@ -221,28 +249,34 @@ export default function Checkout() {
 
   if (loadingAddresses) {
     return (
-      <div className="p-8 text-center">
-        Loading checkout…
+      <div className="max-w-md mx-auto p-6 text-center">
+        <p className="text-gray-500">
+          Loading your shipping addresses…
+        </p>
       </div>
     )
   }
 
   return (
-    <div className="max-w-2xl mx-auto p-6">
-      <h1 className="text-2xl font-semibold mb-6">
+    <div className="max-w-md mx-auto p-6">
+      <h1 className="text-2xl font-semibold mb-6 text-center">
         Checkout
       </h1>
 
       {error && (
-        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div className="mb-4 rounded bg-red-50 border border-red-200 p-3 text-sm text-red-700">
           {error}
         </div>
       )}
 
       {!checkout && (
         <>
-          <section className="border rounded-lg p-5 mb-6">
-            <div className="flex justify-between items-center mb-4">
+          {/* ------------------------------------------------ */}
+          {/* Shipping address                                 */}
+          {/* ------------------------------------------------ */}
+
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-3">
               <h2 className="text-lg font-semibold">
                 Shipping address
               </h2>
@@ -250,265 +284,211 @@ export default function Checkout() {
               <button
                 type="button"
                 onClick={() =>
-                  setShowAddressForm((current) => !current)
+                  setShowAddressForm(!showAddressForm)
                 }
                 className="text-sm underline"
               >
                 {showAddressForm
                   ? 'Cancel'
-                  : 'Add new address'}
+                  : '+ Add address'}
               </button>
             </div>
 
-            {addresses.length === 0 &&
-              !showAddressForm && (
-                <p className="text-sm text-gray-500">
-                  You don't have a saved address yet.
-                  Add one to continue.
-                </p>
-              )}
+            {/* Saved addresses */}
+            {!showAddressForm && (
+              <>
+                {!addresses.length ? (
+                  <div className="rounded border p-4 text-sm text-gray-500">
+                    You don't have a saved shipping address yet.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {addresses.map((address) => (
+                      <label
+                        key={address.id}
+                        className={`block rounded border p-4 cursor-pointer ${
+                          selectedAddressId === address.id
+                            ? 'border-black'
+                            : 'border-gray-200'
+                        }`}
+                      >
+                        <div className="flex gap-3">
+                          <input
+                            type="radio"
+                            name="shipping-address"
+                            value={address.id}
+                            checked={
+                              selectedAddressId ===
+                              address.id
+                            }
+                            onChange={(event) =>
+                              setSelectedAddressId(
+                                event.target.value,
+                              )
+                            }
+                          />
 
-            {addresses.length > 0 && (
-              <div className="space-y-3">
-                {addresses.map((address) => (
-                  <label
-                    key={address.id}
-                    className={`block border rounded-lg p-4 cursor-pointer ${
-                      selectedAddressId === address.id
-                        ? 'border-black'
-                        : 'border-gray-200'
-                    }`}
-                  >
-                    <div className="flex gap-3">
-                      <input
-                        type="radio"
-                        name="shipping-address"
-                        value={address.id}
-                        checked={
-                          selectedAddressId ===
-                          address.id
-                        }
-                        onChange={() =>
-                          setSelectedAddressId(
-                            address.id,
-                          )
-                        }
-                      />
+                          <div className="text-sm">
+                            <p className="font-medium">
+                              {address.line1}
+                            </p>
 
-                      <div className="text-sm">
-                        <p className="font-medium">
-                          {address.line1}
-                        </p>
+                            {address.line2 && (
+                              <p>{address.line2}</p>
+                            )}
 
-                        {address.line2 && (
-                          <p>{address.line2}</p>
-                        )}
+                            <p>
+                              {address.city}
+                              {address.province
+                                ? `, ${address.province}`
+                                : ''}
+                            </p>
 
-                        <p>
-                          {address.city}
-                          {address.province
-                            ? `, ${address.province}`
-                            : ''}
-                        </p>
+                            <p>
+                              {address.postal_code}
+                            </p>
 
-                        <p>
-                          {address.postal_code},{' '}
-                          {address.country}
-                        </p>
+                            <p>{address.country}</p>
 
-                        {address.is_default && (
-                          <span className="inline-block mt-2 text-xs font-medium">
-                            Default address
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </label>
-                ))}
-              </div>
+                            {address.is_default && (
+                              <span className="inline-block mt-1 text-xs font-medium">
+                                Default address
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
 
+            {/* New address form */}
             {showAddressForm && (
-              <form
-                onSubmit={saveAddress}
-                className="mt-5 border-t pt-5 space-y-4"
-              >
-                <h3 className="font-medium">
-                  Add shipping address
-                </h3>
-
+              <div className="border rounded p-4 space-y-3">
                 <div>
-                  <label className="block text-sm mb-1">
-                    Address line 1 *
+                  <label className="block text-sm font-medium mb-1">
+                    Address line 1
                   </label>
 
                   <input
-                    required
-                    value={addressForm.line1}
-                    onChange={(event) =>
-                      setAddressForm({
-                        ...addressForm,
-                        line1: event.target.value,
-                      })
+                    value={line1}
+                    onChange={(e) =>
+                      setLine1(e.target.value)
                     }
-                    className="w-full border rounded px-3 py-2"
                     placeholder="123 Main Street"
+                    className="w-full border rounded px-3 py-2"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm mb-1">
+                  <label className="block text-sm font-medium mb-1">
                     Address line 2
                   </label>
 
                   <input
-                    value={addressForm.line2}
-                    onChange={(event) =>
-                      setAddressForm({
-                        ...addressForm,
-                        line2: event.target.value,
-                      })
+                    value={line2}
+                    onChange={(e) =>
+                      setLine2(e.target.value)
                     }
+                    placeholder="Apartment / Unit / Complex"
                     className="w-full border rounded px-3 py-2"
-                    placeholder="Apartment, unit, etc."
                   />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm mb-1">
-                      City *
-                    </label>
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    City
+                  </label>
 
-                    <input
-                      required
-                      value={addressForm.city}
-                      onChange={(event) =>
-                        setAddressForm({
-                          ...addressForm,
-                          city: event.target.value,
-                        })
-                      }
-                      className="w-full border rounded px-3 py-2"
-                      placeholder="Cape Town"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm mb-1">
-                      Province
-                    </label>
-
-                    <input
-                      value={addressForm.province}
-                      onChange={(event) =>
-                        setAddressForm({
-                          ...addressForm,
-                          province: event.target.value,
-                        })
-                      }
-                      className="w-full border rounded px-3 py-2"
-                      placeholder="Western Cape"
-                    />
-                  </div>
+                  <input
+                    value={city}
+                    onChange={(e) =>
+                      setCity(e.target.value)
+                    }
+                    placeholder="Cape Town"
+                    className="w-full border rounded px-3 py-2"
+                  />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm mb-1">
-                      Postal code *
-                    </label>
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Province
+                  </label>
 
-                    <input
-                      required
-                      value={addressForm.postal_code}
-                      onChange={(event) =>
-                        setAddressForm({
-                          ...addressForm,
-                          postal_code:
-                            event.target.value,
-                        })
-                      }
-                      className="w-full border rounded px-3 py-2"
-                      placeholder="8001"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm mb-1">
-                      Country *
-                    </label>
-
-                    <input
-                      required
-                      value={addressForm.country}
-                      onChange={(event) =>
-                        setAddressForm({
-                          ...addressForm,
-                          country: event.target.value,
-                        })
-                      }
-                      className="w-full border rounded px-3 py-2"
-                    />
-                  </div>
+                  <input
+                    value={province}
+                    onChange={(e) =>
+                      setProvince(e.target.value)
+                    }
+                    placeholder="Western Cape"
+                    className="w-full border rounded px-3 py-2"
+                  />
                 </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Postal code
+                  </label>
+
+                  <input
+                    value={postalCode}
+                    onChange={(e) =>
+                      setPostalCode(e.target.value)
+                    }
+                    placeholder="8001"
+                    className="w-full border rounded px-3 py-2"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Country
+                  </label>
+
+                  <input
+                    value={country}
+                    onChange={(e) =>
+                      setCountry(e.target.value)
+                    }
+                    className="w-full border rounded px-3 py-2"
+                  />
+                </div>
+
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={isDefault}
+                    onChange={(e) =>
+                      setIsDefault(e.target.checked)
+                    }
+                  />
+
+                  Make this my default address
+                </label>
 
                 <button
-                  type="submit"
-                  disabled={savingAddress}
-                  className="bg-black text-white rounded px-5 py-2 disabled:opacity-50"
+                  type="button"
+                  onClick={saveAddress}
+                  className="w-full bg-gray-800 text-white rounded px-4 py-2"
                 >
-                  {savingAddress
-                    ? 'Saving…'
-                    : 'Save address'}
+                  Save address
                 </button>
-              </form>
+              </div>
             )}
-          </section>
+          </div>
 
-          <section className="border rounded-lg p-5 mb-6">
-            <h2 className="text-lg font-semibold mb-4">
-              Order summary
-            </h2>
-
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span>Subtotal</span>
-
-                <span>
-                  R{subtotal.toFixed(2)}
-                </span>
-              </div>
-
-              <div className="flex justify-between">
-                <span>Delivery</span>
-
-                <span>
-                  {deliveryFee === 0
-                    ? 'FREE'
-                    : `R${deliveryFee.toFixed(2)}`}
-                </span>
-              </div>
-
-              <div className="border-t pt-3 mt-3 flex justify-between text-base font-semibold">
-                <span>Total</span>
-
-                <span>
-                  R{estimatedTotal.toFixed(2)}
-                </span>
-              </div>
-
-              <p className="text-xs text-gray-500 pt-2">
-                Final price and stock are verified
-                server-side before the order is created.
-              </p>
-            </div>
-          </section>
+          {/* ------------------------------------------------ */}
+          {/* Payment                                           */}
+          {/* ------------------------------------------------ */}
 
           <button
             onClick={startCheckout}
             disabled={
-              submitting || !selectedAddressId
+              submitting ||
+              !selectedAddressId ||
+              showAddressForm
             }
             className="w-full bg-black text-white rounded px-6 py-3 disabled:opacity-50"
           >
@@ -516,12 +496,18 @@ export default function Checkout() {
               ? 'Preparing payment…'
               : 'Pay with PayFast'}
           </button>
+
+          {showAddressForm && (
+            <p className="text-xs text-gray-500 text-center mt-2">
+              Save your address before continuing to payment.
+            </p>
+          )}
         </>
       )}
 
       {checkout && (
-        <div className="text-center">
-          <p className="text-sm text-gray-600 mb-4">
+        <>
+          <p className="text-sm text-gray-600 mb-4 text-center">
             Redirecting you to PayFast…
           </p>
 
@@ -541,7 +527,7 @@ export default function Checkout() {
               ),
             )}
           </form>
-        </div>
+        </>
       )}
     </div>
   )

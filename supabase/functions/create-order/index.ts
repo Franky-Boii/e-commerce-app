@@ -1,10 +1,4 @@
 // supabase/functions/create-order/index.ts
-//
-// Creates a pending PayFast order after validating the authenticated
-// customer's cart, products, stock, prices and shipping address.
-//
-// Deploy:
-//   supabase functions deploy create-order
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4'
 import { crypto } from 'https://deno.land/std@0.224.0/crypto/mod.ts'
@@ -23,14 +17,12 @@ const siteUrl = Deno.env.get('SITE_URL') ?? 'http://localhost:5173'
 
 const admin = createClient(supabaseUrl, serviceRoleKey)
 
-async function payfastSignature(
-  fields: Record<string, string>,
-): Promise<string> {
+async function payfastSignature(fields: Record<string, string>): Promise<string> {
   const ordered = Object.entries(fields)
-    .filter(([, value]) => value !== '' && value !== undefined && value !== null)
+    .filter(([, v]) => v !== '' && v !== undefined && v !== null)
     .map(
-      ([key, value]) =>
-        `${key}=${encodeURIComponent(value.trim()).replace(/%20/g, '+')}`,
+      ([k, v]) =>
+        `${k}=${encodeURIComponent(v.trim()).replace(/%20/g, '+')}`,
     )
     .join('&')
 
@@ -45,7 +37,7 @@ async function payfastSignature(
   const hashBuffer = await crypto.subtle.digest('MD5', data)
 
   return Array.from(new Uint8Array(hashBuffer))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .map((b) => b.toString(16).padStart(2, '0'))
     .join('')
 }
 
@@ -58,7 +50,7 @@ Deno.serve(async (req) => {
 
   try {
     // ----------------------------------------------------------
-    // 1. Authenticate customer
+    // 1. Authenticate the user
     // ----------------------------------------------------------
 
     const authHeader = req.headers.get('Authorization')
@@ -79,7 +71,7 @@ Deno.serve(async (req) => {
     const userId = userData.user.id
 
     // ----------------------------------------------------------
-    // 2. Read checkout request
+    // 2. Read the requested shipping address
     // ----------------------------------------------------------
 
     const body = await req.json().catch(() => ({}))
@@ -87,16 +79,15 @@ Deno.serve(async (req) => {
     const addressId =
       typeof body.address_id === 'string'
         ? body.address_id
-        : ''
+        : null
 
     if (!addressId) {
-      throw new Error('Please select a shipping address')
+      throw new Error('Shipping address is required')
     }
 
-    // ----------------------------------------------------------
-    // 3. Verify the address belongs to this customer
-    // ----------------------------------------------------------
-
+    // IMPORTANT:
+    // Because this query uses user_id as well as address_id,
+    // a customer cannot submit another customer's address ID.
     const { data: address, error: addressError } = await admin
       .from('addresses')
       .select(
@@ -111,7 +102,7 @@ Deno.serve(async (req) => {
     }
 
     // ----------------------------------------------------------
-    // 4. Load customer's cart
+    // 3. Load the user's cart
     // ----------------------------------------------------------
 
     const { data: cart, error: cartError } = await admin
@@ -140,7 +131,7 @@ Deno.serve(async (req) => {
     }
 
     // ----------------------------------------------------------
-    // 5. Validate products and stock
+    // 4. Validate stock for every item
     // ----------------------------------------------------------
 
     for (const item of cartItems) {
@@ -153,9 +144,11 @@ Deno.serve(async (req) => {
         status: string
       }
 
-      if (!product) {
-        throw new Error('A product in your cart is no longer available')
-      }
+      const { data: inv } = await admin
+        .from('inventory')
+        .select('quantity')
+        .eq('product_id', product.id)
+        .single()
 
       if (product.status !== 'active') {
         throw new Error(
@@ -163,26 +156,7 @@ Deno.serve(async (req) => {
         )
       }
 
-      if (!Number.isInteger(item.quantity) || item.quantity <= 0) {
-        throw new Error(
-          `Invalid quantity for ${product.name}`,
-        )
-      }
-
-      const { data: inventory, error: inventoryError } =
-        await admin
-          .from('inventory')
-          .select('quantity')
-          .eq('product_id', product.id)
-          .single()
-
-      if (inventoryError || !inventory) {
-        throw new Error(
-          `Inventory unavailable for ${product.name}`,
-        )
-      }
-
-      if (inventory.quantity < item.quantity) {
+      if (!inv || inv.quantity < item.quantity) {
         throw new Error(
           `${product.name} does not have enough stock`,
         )
@@ -190,7 +164,7 @@ Deno.serve(async (req) => {
     }
 
     // ----------------------------------------------------------
-    // 6. Calculate totals server-side
+    // 5. Calculate totals server-side
     // ----------------------------------------------------------
 
     const subtotal = cartItems.reduce((sum, item) => {
@@ -198,7 +172,7 @@ Deno.serve(async (req) => {
         price: number
       }
 
-      return sum + Number(product.price) * item.quantity
+      return sum + product.price * item.quantity
     }, 0)
 
     const deliveryFee =
@@ -208,26 +182,14 @@ Deno.serve(async (req) => {
 
     const total = subtotal + deliveryFee
 
-    const currencies = new Set(
-      cartItems.map((item) => {
-        const product = item.product as unknown as {
-          currency: string
-        }
-
-        return product.currency
-      }),
-    )
-
-    if (currencies.size !== 1) {
-      throw new Error(
-        'Cart contains products with different currencies',
-      )
-    }
-
-    const currency = [...currencies][0]
+    const currency = (
+      cartItems[0].product as unknown as {
+        currency: string
+      }
+    ).currency
 
     // ----------------------------------------------------------
-    // 7. Create pending order
+    // 6. Create the order
     // ----------------------------------------------------------
 
     const { data: order, error: orderError } = await admin
@@ -249,7 +211,7 @@ Deno.serve(async (req) => {
     }
 
     // ----------------------------------------------------------
-    // 8. Snapshot order items
+    // 7. Snapshot order items
     // ----------------------------------------------------------
 
     const orderItemsPayload = cartItems.map((item) => {
@@ -267,7 +229,7 @@ Deno.serve(async (req) => {
         sku: product.sku,
         unit_price: product.price,
         quantity: item.quantity,
-        line_total: Number(product.price) * item.quantity,
+        line_total: product.price * item.quantity,
       }
     })
 
@@ -276,17 +238,11 @@ Deno.serve(async (req) => {
       .insert(orderItemsPayload)
 
     if (orderItemsError) {
-      // Clean up the order if its items could not be created.
-      await admin
-        .from('orders')
-        .delete()
-        .eq('id', order.id)
-
       throw orderItemsError
     }
 
     // ----------------------------------------------------------
-    // 9. Create pending payment
+    // 8. Create pending payment
     // ----------------------------------------------------------
 
     const { error: paymentError } = await admin
@@ -300,16 +256,24 @@ Deno.serve(async (req) => {
       })
 
     if (paymentError) {
-      await admin
-        .from('orders')
-        .delete()
-        .eq('id', order.id)
-
       throw paymentError
     }
 
     // ----------------------------------------------------------
-    // 10. Build PayFast payment request
+    // 9. Empty the cart
+    // ----------------------------------------------------------
+
+    const { error: clearCartError } = await admin
+      .from('cart_items')
+      .delete()
+      .eq('cart_id', cart.id)
+
+    if (clearCartError) {
+      throw clearCartError
+    }
+
+    // ----------------------------------------------------------
+    // 10. Build PayFast request
     // ----------------------------------------------------------
 
     const payfastHost =
@@ -338,7 +302,6 @@ Deno.serve(async (req) => {
         fields,
       }),
       {
-        status: 200,
         headers: {
           ...corsHeaders,
           'Content-Type': 'application/json',
@@ -346,11 +309,6 @@ Deno.serve(async (req) => {
       },
     )
   } catch (err) {
-    console.error(
-      'create-order error:',
-      err instanceof Error ? err.message : String(err),
-    )
-
     return new Response(
       JSON.stringify({
         error:
