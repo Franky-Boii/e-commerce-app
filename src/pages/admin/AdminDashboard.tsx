@@ -13,6 +13,15 @@ interface Category {
   slug: string
 }
 
+interface AdminStats {
+  totalProducts: number
+  activeProducts: number
+  totalOrders: number
+  pendingOrders: number
+  paidOrders: number
+  revenue: number
+}
+
 type ProductForm = {
   name: string
   sku: string
@@ -33,6 +42,89 @@ const emptyForm: ProductForm = {
   stock: '0',
   status: 'active',
   category_id: '',
+}
+
+async function fetchAdminStats(): Promise<AdminStats> {
+  const [
+    productsResult,
+    activeProductsResult,
+    ordersResult,
+    pendingOrdersResult,
+    paidOrdersResult,
+    revenueResult,
+  ] = await Promise.all([
+    supabase
+      .from('products')
+      .select('id', { count: 'exact', head: true }),
+
+    supabase
+      .from('products')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'active'),
+
+    supabase
+      .from('orders')
+      .select('id', { count: 'exact', head: true }),
+
+    supabase
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'pending_payment'),
+
+    supabase
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'paid'),
+
+    supabase
+      .from('orders')
+      .select('total')
+      .in('status', [
+        'paid',
+        'processing',
+        'shipped',
+        'delivered',
+      ]),
+  ])
+
+  if (productsResult.error) {
+    throw productsResult.error
+  }
+
+  if (activeProductsResult.error) {
+    throw activeProductsResult.error
+  }
+
+  if (ordersResult.error) {
+    throw ordersResult.error
+  }
+
+  if (pendingOrdersResult.error) {
+    throw pendingOrdersResult.error
+  }
+
+  if (paidOrdersResult.error) {
+    throw paidOrdersResult.error
+  }
+
+  if (revenueResult.error) {
+    throw revenueResult.error
+  }
+
+  const revenue =
+    revenueResult.data?.reduce(
+      (sum, order) => sum + Number(order.total ?? 0),
+      0
+    ) ?? 0
+
+  return {
+    totalProducts: productsResult.count ?? 0,
+    activeProducts: activeProductsResult.count ?? 0,
+    totalOrders: ordersResult.count ?? 0,
+    pendingOrders: pendingOrdersResult.count ?? 0,
+    paidOrders: paidOrdersResult.count ?? 0,
+    revenue,
+  }
 }
 
 async function fetchAllProducts(): Promise<Product[]> {
@@ -108,6 +200,15 @@ export default function AdminDashboard() {
   const queryClient = useQueryClient()
 
   const {
+    data: adminStats,
+    isLoading: statsLoading,
+    error: statsError,
+  } = useQuery({
+    queryKey: ['admin-stats'],
+    queryFn: fetchAdminStats,
+  })
+
+  const {
     data: products,
     isLoading,
     error: productsError,
@@ -126,6 +227,7 @@ export default function AdminDashboard() {
   })
 
   const [form, setForm] = useState<ProductForm>(emptyForm)
+
   const [editingProduct, setEditingProduct] =
     useState<Product | null>(null)
 
@@ -136,11 +238,16 @@ export default function AdminDashboard() {
     useState<string | null>(null)
 
   const [categoryName, setCategoryName] = useState('')
+
   const [editingCategory, setEditingCategory] =
     useState<Category | null>(null)
 
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
+  const [error, setError] =
+    useState<string | null>(null)
+
+  const [success, setSuccess] =
+    useState<string | null>(null)
+
   const [categoryError, setCategoryError] =
     useState<string | null>(null)
 
@@ -162,7 +269,8 @@ export default function AdminDashboard() {
         editingProduct.inventory?.quantity ?? 0
       ),
       status: editingProduct.status,
-      category_id: editingProduct.category_id ?? '',
+      category_id:
+        editingProduct.category_id ?? '',
     })
 
     setSelectedImage(null)
@@ -170,7 +278,9 @@ export default function AdminDashboard() {
     const existingImage =
       editingProduct.product_images?.[0]
 
-    setImagePreview(existingImage?.url ?? null)
+    setImagePreview(
+      existingImage?.url ?? null
+    )
   }, [editingProduct])
 
   function handleImageChange(
@@ -184,13 +294,17 @@ export default function AdminDashboard() {
     }
 
     if (!file.type.startsWith('image/')) {
-      setError('Please select a valid image file.')
+      setError(
+        'Please select a valid image file.'
+      )
       setSelectedImage(null)
       return
     }
 
     if (file.size > 5 * 1024 * 1024) {
-      setError('Image must be smaller than 5 MB.')
+      setError(
+        'Image must be smaller than 5 MB.'
+      )
       setSelectedImage(null)
       return
     }
@@ -200,7 +314,9 @@ export default function AdminDashboard() {
 
     setSelectedImage(file)
 
-    const previewUrl = URL.createObjectURL(file)
+    const previewUrl =
+      URL.createObjectURL(file)
+
     setImagePreview(previewUrl)
   }
 
@@ -209,7 +325,9 @@ export default function AdminDashboard() {
       const name = categoryName.trim()
 
       if (!name) {
-        throw new Error('Category name is required.')
+        throw new Error(
+          'Category name is required.'
+        )
       }
 
       const slug = createSlug(name)
@@ -220,20 +338,25 @@ export default function AdminDashboard() {
         )
       }
 
-      const { error: insertError } = await supabase
-        .from('categories')
-        .insert({
-          name,
-          slug,
-        })
+      const { error: insertError } =
+        await supabase
+          .from('categories')
+          .insert({
+            name,
+            slug,
+          })
 
-      if (insertError) throw insertError
+      if (insertError) {
+        throw insertError
+      }
     },
 
     onSuccess: () => {
       setCategoryName('')
       setCategoryError(null)
-      setSuccess('Category created successfully.')
+      setSuccess(
+        'Category created successfully.'
+      )
 
       queryClient.invalidateQueries({
         queryKey: ['categories'],
@@ -242,6 +365,7 @@ export default function AdminDashboard() {
 
     onError: (err) => {
       setSuccess(null)
+
       setCategoryError(
         err instanceof Error
           ? err.message
@@ -261,7 +385,9 @@ export default function AdminDashboard() {
       const name = categoryName.trim()
 
       if (!name) {
-        throw new Error('Category name is required.')
+        throw new Error(
+          'Category name is required.'
+        )
       }
 
       const slug = createSlug(name)
@@ -272,22 +398,27 @@ export default function AdminDashboard() {
         )
       }
 
-      const { error: updateError } = await supabase
-        .from('categories')
-        .update({
-          name,
-          slug,
-        })
-        .eq('id', editingCategory.id)
+      const { error: updateError } =
+        await supabase
+          .from('categories')
+          .update({
+            name,
+            slug,
+          })
+          .eq('id', editingCategory.id)
 
-      if (updateError) throw updateError
+      if (updateError) {
+        throw updateError
+      }
     },
 
     onSuccess: () => {
       setCategoryName('')
       setEditingCategory(null)
       setCategoryError(null)
-      setSuccess('Category updated successfully.')
+      setSuccess(
+        'Category updated successfully.'
+      )
 
       queryClient.invalidateQueries({
         queryKey: ['categories'],
@@ -304,6 +435,7 @@ export default function AdminDashboard() {
 
     onError: (err) => {
       setSuccess(null)
+
       setCategoryError(
         err instanceof Error
           ? err.message
@@ -318,7 +450,9 @@ export default function AdminDashboard() {
       const sku = form.sku.trim()
 
       if (!name) {
-        throw new Error('Product name is required.')
+        throw new Error(
+          'Product name is required.'
+        )
       }
 
       if (!sku) {
@@ -328,13 +462,19 @@ export default function AdminDashboard() {
       const price = Number(form.price)
       const stock = Number(form.stock)
 
-      if (!Number.isFinite(price) || price < 0) {
+      if (
+        !Number.isFinite(price) ||
+        price < 0
+      ) {
         throw new Error(
           'Price must be a valid number greater than or equal to 0.'
         )
       }
 
-      if (!Number.isInteger(stock) || stock < 0) {
+      if (
+        !Number.isInteger(stock) ||
+        stock < 0
+      ) {
         throw new Error(
           'Stock must be a whole number greater than or equal to 0.'
         )
@@ -342,26 +482,30 @@ export default function AdminDashboard() {
 
       const slug = createSlug(name)
 
-      const { data: product, error: insertError } =
-        await supabase
-          .from('products')
-          .insert({
-            name,
-            sku,
-            slug,
-            description:
-              form.description.trim() || null,
-            price,
-            currency:
-              form.currency.trim() || 'ZAR',
-            category_id:
-              form.category_id || null,
-            status: form.status,
-          })
-          .select()
-          .single()
+      const {
+        data: product,
+        error: insertError,
+      } = await supabase
+        .from('products')
+        .insert({
+          name,
+          sku,
+          slug,
+          description:
+            form.description.trim() || null,
+          price,
+          currency:
+            form.currency.trim() || 'ZAR',
+          category_id:
+            form.category_id || null,
+          status: form.status,
+        })
+        .select()
+        .single()
 
-      if (insertError) throw insertError
+      if (insertError) {
+        throw insertError
+      }
 
       const { error: inventoryError } =
         await supabase
@@ -422,10 +566,16 @@ export default function AdminDashboard() {
       setSelectedImage(null)
       setImagePreview(null)
       setError(null)
-      setSuccess('Product created successfully.')
+      setSuccess(
+        'Product created successfully.'
+      )
 
       queryClient.invalidateQueries({
         queryKey: ['admin-products'],
+      })
+
+      queryClient.invalidateQueries({
+        queryKey: ['admin-stats'],
       })
 
       queryClient.invalidateQueries({
@@ -435,6 +585,7 @@ export default function AdminDashboard() {
 
     onError: (err) => {
       setSuccess(null)
+
       setError(
         err instanceof Error
           ? err.message
@@ -453,12 +604,16 @@ export default function AdminDashboard() {
 
       const name = form.name.trim()
       const sku = form.sku.trim()
-      const description = form.description.trim()
+      const description =
+        form.description.trim()
+
       const currency =
         form.currency.trim() || 'ZAR'
 
       if (!name) {
-        throw new Error('Product name is required.')
+        throw new Error(
+          'Product name is required.'
+        )
       }
 
       if (!sku) {
@@ -468,13 +623,19 @@ export default function AdminDashboard() {
       const price = Number(form.price)
       const stock = Number(form.stock)
 
-      if (!Number.isFinite(price) || price < 0) {
+      if (
+        !Number.isFinite(price) ||
+        price < 0
+      ) {
         throw new Error(
           'Price must be a valid number greater than or equal to 0.'
         )
       }
 
-      if (!Number.isInteger(stock) || stock < 0) {
+      if (
+        !Number.isInteger(stock) ||
+        stock < 0
+      ) {
         throw new Error(
           'Stock must be a whole number greater than or equal to 0.'
         )
@@ -489,7 +650,8 @@ export default function AdminDashboard() {
             name,
             sku,
             slug,
-            description: description || null,
+            description:
+              description || null,
             price,
             currency,
             category_id:
@@ -500,19 +662,24 @@ export default function AdminDashboard() {
           })
           .eq('id', editingProduct.id)
 
-      if (productError) throw productError
+      if (productError) {
+        throw productError
+      }
 
       const { error: inventoryError } =
         await supabase
           .from('inventory')
           .upsert({
-            product_id: editingProduct.id,
+            product_id:
+              editingProduct.id,
             quantity: stock,
             updated_at:
               new Date().toISOString(),
           })
 
-      if (inventoryError) throw inventoryError
+      if (inventoryError) {
+        throw inventoryError
+      }
 
       if (selectedImage) {
         const publicUrl =
@@ -585,10 +752,16 @@ export default function AdminDashboard() {
       setSelectedImage(null)
       setImagePreview(null)
       setError(null)
-      setSuccess('Product updated successfully.')
+      setSuccess(
+        'Product updated successfully.'
+      )
 
       queryClient.invalidateQueries({
         queryKey: ['admin-products'],
+      })
+
+      queryClient.invalidateQueries({
+        queryKey: ['admin-stats'],
       })
 
       queryClient.invalidateQueries({
@@ -598,6 +771,7 @@ export default function AdminDashboard() {
 
     onError: (err) => {
       setSuccess(null)
+
       setError(
         err instanceof Error
           ? err.message
@@ -607,27 +781,33 @@ export default function AdminDashboard() {
   })
 
   const toggleProductStatus = useMutation({
-    mutationFn: async (product: Product) => {
+    mutationFn: async (
+      product: Product
+    ) => {
       const nextStatus =
         product.status === 'active'
           ? 'inactive'
           : 'active'
 
-      const { error: updateError } =
-        await supabase
-          .from('products')
-          .update({
-            status: nextStatus,
-            updated_at:
-              new Date().toISOString(),
-          })
-          .eq('id', product.id)
+      const {
+        error: updateError,
+      } = await supabase
+        .from('products')
+        .update({
+          status: nextStatus,
+          updated_at:
+            new Date().toISOString(),
+        })
+        .eq('id', product.id)
 
-      if (updateError) throw updateError
+      if (updateError) {
+        throw updateError
+      }
     },
 
     onSuccess: (_, product) => {
       setError(null)
+
       setSuccess(
         product.status === 'active'
           ? 'Product deactivated.'
@@ -639,12 +819,17 @@ export default function AdminDashboard() {
       })
 
       queryClient.invalidateQueries({
+        queryKey: ['admin-stats'],
+      })
+
+      queryClient.invalidateQueries({
         queryKey: ['products'],
       })
     },
 
     onError: (err) => {
       setSuccess(null)
+
       setError(
         err instanceof Error
           ? err.message
@@ -653,7 +838,9 @@ export default function AdminDashboard() {
     },
   })
 
-  function handleSubmit(event: FormEvent) {
+  function handleSubmit(
+    event: FormEvent
+  ) {
     event.preventDefault()
 
     setError(null)
@@ -737,6 +924,102 @@ export default function AdminDashboard() {
         </p>
       </div>
 
+      {/* Dashboard Overview */}
+      <section className="mb-8">
+        <div className="mb-4">
+          <h2 className="text-xl font-semibold">
+            Store Overview
+          </h2>
+
+          <p className="text-sm text-gray-500 mt-1">
+            Quick overview of your store
+            performance.
+          </p>
+        </div>
+
+        {statsError && (
+          <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            Failed to load store statistics.
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="border rounded-lg p-5 bg-white shadow-sm">
+            <p className="text-sm text-gray-500">
+              Total Products
+            </p>
+
+            <p className="text-3xl font-semibold mt-2">
+              {statsLoading
+                ? '…'
+                : adminStats?.totalProducts ?? 0}
+            </p>
+          </div>
+
+          <div className="border rounded-lg p-5 bg-white shadow-sm">
+            <p className="text-sm text-gray-500">
+              Active Products
+            </p>
+
+            <p className="text-3xl font-semibold mt-2">
+              {statsLoading
+                ? '…'
+                : adminStats?.activeProducts ?? 0}
+            </p>
+          </div>
+
+          <div className="border rounded-lg p-5 bg-white shadow-sm">
+            <p className="text-sm text-gray-500">
+              Total Orders
+            </p>
+
+            <p className="text-3xl font-semibold mt-2">
+              {statsLoading
+                ? '…'
+                : adminStats?.totalOrders ?? 0}
+            </p>
+          </div>
+
+          <div className="border rounded-lg p-5 bg-white shadow-sm">
+            <p className="text-sm text-gray-500">
+              Pending Payment
+            </p>
+
+            <p className="text-3xl font-semibold mt-2">
+              {statsLoading
+                ? '…'
+                : adminStats?.pendingOrders ?? 0}
+            </p>
+          </div>
+
+          <div className="border rounded-lg p-5 bg-white shadow-sm">
+            <p className="text-sm text-gray-500">
+              Paid Orders
+            </p>
+
+            <p className="text-3xl font-semibold mt-2">
+              {statsLoading
+                ? '…'
+                : adminStats?.paidOrders ?? 0}
+            </p>
+          </div>
+
+          <div className="border rounded-lg p-5 bg-white shadow-sm">
+            <p className="text-sm text-gray-500">
+              Revenue
+            </p>
+
+            <p className="text-3xl font-semibold mt-2">
+              {statsLoading
+                ? '…'
+                : `R ${Number(
+                    adminStats?.revenue ?? 0
+                  ).toFixed(2)}`}
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* Categories */}
       <section className="border rounded-lg p-6 mb-8 bg-white shadow-sm">
         <div className="mb-5">
@@ -757,7 +1040,9 @@ export default function AdminDashboard() {
             type="text"
             value={categoryName}
             onChange={(event) =>
-              setCategoryName(event.target.value)
+              setCategoryName(
+                event.target.value
+              )
             }
             placeholder="Category name"
             className="flex-1 border rounded px-3 py-2"
@@ -778,7 +1063,9 @@ export default function AdminDashboard() {
           {editingCategory && (
             <button
               type="button"
-              onClick={handleCancelCategoryEdit}
+              onClick={
+                handleCancelCategoryEdit
+              }
               className="border rounded px-5 py-2 hover:bg-gray-50"
             >
               Cancel
@@ -826,7 +1113,9 @@ export default function AdminDashboard() {
                 <button
                   type="button"
                   onClick={() =>
-                    handleEditCategory(category)
+                    handleEditCategory(
+                      category
+                    )
                   }
                   className="border rounded px-3 py-2 text-sm hover:bg-gray-50"
                 >
@@ -838,7 +1127,7 @@ export default function AdminDashboard() {
         </div>
       </section>
 
-      {/* Product form */}
+      {/* Product Form */}
       <form
         onSubmit={handleSubmit}
         className="border rounded-lg p-6 mb-8 bg-white shadow-sm"
@@ -1044,9 +1333,11 @@ export default function AdminDashboard() {
               <option value="active">
                 Active
               </option>
+
               <option value="inactive">
                 Inactive
               </option>
+
               <option value="archived">
                 Archived
               </option>
